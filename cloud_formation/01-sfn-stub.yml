@@ -1,0 +1,131 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Step Functions stub flow:
+  - Triggered manually or later via SQS/SNS/EventBridge
+  - Placeholder for vendor processing (Bloomberg / Refinitiv)
+  - Writes logs to CloudWatch Logs
+
+Parameters:
+  BbBucketName:
+    Type: String
+    Description: Name of the Bloomberg raw S3 bucket
+  RefBucketName:
+    Type: String
+    Description: Name of the Refinitiv raw S3 bucket
+
+Resources:
+
+  # ------------------------
+  # CloudWatch Log Group for Step Function
+  # ------------------------
+  SfnLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vendedlogs/states/${AWS::StackName}-logs"
+      RetentionInDays: 14
+
+  # ------------------------
+  # IAM Role for Step Functions
+  # ------------------------
+  SfnExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SfnLogsAndS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudWatch Logs (delivery + streaming)
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              # Read raw buckets (as before)
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${BbBucketName}"
+                  - !Sub "arn:aws:s3:::${RefBucketName}"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${BbBucketName}/*"
+                  - !Sub "arn:aws:s3:::${RefBucketName}/*"
+
+  # ------------------------
+  # Step Function Definition
+  # ------------------------
+  SfnStub:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${AWS::StackName}-state-machine"
+      RoleArn: !GetAtt SfnExecutionRole.Arn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt SfnLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+      DefinitionString: !Sub |
+        {
+          "Comment": "Stub flow for vendor feed processing",
+          "StartAt": "ChooseVendor",
+          "States": {
+            "ChooseVendor": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.vendor",
+                  "StringEquals": "bloomberg",
+                  "Next": "ProcessBloomberg"
+                },
+                {
+                  "Variable": "$.vendor",
+                  "StringEquals": "refinitiv",
+                  "Next": "ProcessRefinitiv"
+                }
+              ],
+              "Default": "UnknownVendor"
+            },
+            "ProcessBloomberg": {
+              "Type": "Pass",
+              "Result": "Processing Bloomberg S3 data from ${BbBucketName}",
+              "End": true
+            },
+            "ProcessRefinitiv": {
+              "Type": "Pass",
+              "Result": "Processing Refinitiv S3 data from ${RefBucketName}",
+              "End": true
+            },
+            "UnknownVendor": {
+              "Type": "Fail",
+              "Cause": "Unknown vendor"
+            }
+          }
+        }
+
+Outputs:
+  StateMachineArn:
+    Description: ARN of the Step Function
+    Value: !Ref SfnStub
+  LogGroupName:
+    Description: CloudWatch log group for Step Function
+    Value: !Ref SfnLogGroup

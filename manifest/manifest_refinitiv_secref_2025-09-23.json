@@ -1,0 +1,17 @@
+{
+  "ingest_id": "uuid-223e4567-e89b-12d3-a456-426614174001",
+  "vendor": "refinitiv",
+  "dataset": "secref",
+  "ingest_type": "eod",
+  "objects": [
+    "s3://<YOUR_REFINITIV_BUCKET>/dataset=secref/year=2025/month=09/day=23/refinitiv_secref_2025-09-23.jsonl.gz"
+  ],
+  "checksums": [],
+  "record_count_hint": 2,
+  "vendor_ts": "2025-09-23T01:56:00Z",
+  "config_versions": {
+    "dq": "secref@v1.0.0",
+    "xref": "ids@v1.0.0",
+    "precedence": "secref@v1.0.0"
+  }
+}

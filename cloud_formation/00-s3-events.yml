@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Raw-market-data notification kit (SQS-only):
+  - S3 raw buckets (Bloomberg/Refinitiv) with versioning + lifecycle
+  - S3 -> EventBridge (enabled)
+  - EventBridge rule (dataset= prefix) -> SQS + CloudWatch Logs
+  - No SNS/email
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: mdp
+    Description: Short name to prefix resource names (e.g., mdp)
+
+Resources:
+
+  ###########################################################################
+  # S3 BUCKETS (RAW LANDING)
+  # - Turn on versioning (safer; lets you recover files)
+  # - Lifecycle: move old objects to cheaper storage after 60 days
+  # - EventBridge notifications: ON (so EB can see ObjectCreated events)
+  ###########################################################################
+
+  BbRawBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "${Prefix}-bb-raw-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: "bb-ia-after-60"
+            Status: Enabled
+            Prefix: "dataset="              # applies lifecycle to keys under dataset=
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 60
+            ExpirationInDays: 3650
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true          # let EB see ObjectCreated events
+
+  RefinitivRawBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "${Prefix}-refinitiv-raw-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: "ref-ia-after-60"
+            Status: Enabled
+            Prefix: "dataset="
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 60
+            ExpirationInDays: 3650
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+
+  ###########################################################################
+  # CLOUDWATCH LOGS
+  # - A log group to receive a copy of every matched EB event (for eyeballing)
+  # - A logs resource policy that lets EventBridge put events here
+  ###########################################################################
+
+  RawDataLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/secref/rawdata-rule/${AWS::StackName}"
+      RetentionInDays: 14
+
+  LogsResourcePolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub "EBToLogs-${AWS::StackName}"
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Sid": "AllowEventBridgePutLogs",
+            "Effect": "Allow",
+            "Principal": { "Service": "events.amazonaws.com" },
+            "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+            "Resource": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/secref/rawdata-rule/${AWS::StackName}:*"
+          }]
+        }
+
+  ###########################################################################
+  # SQS (TAP QUEUE)
+  # - This receives the full EB event JSON so you can verify arrivals
+  # - We attach a QueuePolicy that allows *this* EB rule to SendMessage
+  ###########################################################################
+
+  RawDataQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Prefix}-rawdata-tap-${AWS::StackName}"
+      VisibilityTimeout: 30
+
+  # Queue policy that allows the specific EB rule (added below) to send here.
+  RawDataQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [ !Ref RawDataQueue ]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeSend
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt RawDataQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt RawDataEventRule.Arn   # <-- binds EB rule to this queue
+
+  ###########################################################################
+  # EVENTBRIDGE RULE
+  # - Matches S3 ObjectCreated events from *either* raw bucket
+  # - Only when the object key starts with "dataset="
+  # - Targets: SQS queue (above) + CloudWatch Logs (above)
+  ###########################################################################
+
+  RawDataEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: "On S3 ObjectCreated (keys starting dataset=) send to SQS + CW Logs"
+      EventPattern:
+        source: ["aws.s3"]
+        detail-type: ["Object Created"]
+        detail:
+          bucket:
+            name:
+              - !Ref BbRawBucket
+              - !Ref RefinitivRawBucket
+          object:
+            key:
+              - prefix: "dataset="          # only fire for keys beginning dataset=
+      Targets:
+        - Id: sqs
+          Arn: !GetAtt RawDataQueue.Arn
+        - Id: cwl
+          Arn: !GetAtt RawDataLogGroup.Arn
+
+Outputs:
+  BbRawBucketName:
+    Description: Bloomberg Raw bucket
+    Value: !Ref BbRawBucket
+  RefinitivRawBucketName:
+    Description: Refinitiv Raw bucket
+    Value: !Ref RefinitivRawBucket
+  RawDataQueueUrl:
+    Description: SQS queue URL (tap)
+    Value: !Ref RawDataQueue
+  RawDataQueueArn:
+    Description: SQS queue ARN
+    Value: !GetAtt RawDataQueue.Arn
+  RawDataLogGroupName:
+    Description: CloudWatch Log Group name
+    Value: !Ref RawDataLogGroup
+  RawDataRuleName:
+    Description: EventBridge rule name
+    Value: !Ref RawDataEventRule

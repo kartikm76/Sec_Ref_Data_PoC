@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "env_defaults": {
+    "region": "us-east-1",
+    "prefix": "mdp"
+  },
+  "stacks": [
+    {
+      "name": "mdp-s3-raw-events",
+      "template": "00-s3-events.yml",
+      "capabilities": ["CAPABILITY_NAMED_IAM"],
+      "params": { "Prefix": "${env.prefix}" },
+      "outputs": [
+        "BbRawBucketName",
+        "RefinitivRawBucketName",
+        "RawDataQueueUrl",
+        "RawDataRuleName"
+      ],
+      "tags": ["core", "ingest"]
+    },
+    {
+      "name": "mdp-sfn-stub",
+      "template": "01-sfn-stub.yml",
+      "capabilities": ["CAPABILITY_NAMED_IAM"],
+      "depends_on": ["mdp-s3-raw-events"],
+      "params": {
+        "BbBucketName": "${out.mdp-s3-raw-events.BbRawBucketName}",
+        "RefBucketName": "${out.mdp-s3-raw-events.RefinitivRawBucketName}"
+      },
+      "outputs": [],
+      "tags": ["orchestration"]
+    },
+    {
+      "name": "mdp-warehouse-buckets",
+      "template": "02-warehouse-buckets.yml",
+      "params": { "Prefix": "${env.prefix}" },
+      "outputs": [
+        "WarehouseBucketName",
+        "AthenaResultsBucketName"
+      ],
+      "tags": ["storage"]
+    },
+    {
+      "name": "mdp-athena-ddl",
+      "template": "03-athena-ddl.yml",
+      "depends_on": ["mdp-warehouse-buckets"],
+      "params": {
+        "Prefix": "${env.prefix}",
+        "WarehouseBucketName": "${out.mdp-warehouse-buckets.WarehouseBucketName}",
+        "AthenaResultsBucketName": "${out.mdp-warehouse-buckets.AthenaResultsBucketName}",
+        "DatabaseName": "bronze",
+        "CreateWorkGroup": "true"
+      },
+      "outputs": [],
+      "tags": ["ddl", "athena"]
+    }
+  ]
+}

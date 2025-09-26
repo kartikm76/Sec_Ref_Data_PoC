@@ -1,0 +1,295 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Creates/updates Athena database and two Bronze Iceberg tables (Bloomberg/Refinitiv)
+  by executing DDL via a Lambda-backed custom resource. Also provisions an Athena
+  WorkGroup that writes to your query-results bucket.
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: mdp
+    Description: Short name used in resource names.
+
+  WarehouseBucketName:
+    Type: String
+    Description: The S3 bucket that stores Iceberg/Parquet data (from 02-warehouse-buckets.yml).
+
+  AthenaResultsBucketName:
+    Type: String
+    Description: The S3 bucket for Athena query outputs (from 02-warehouse-buckets.yml).
+
+  DatabaseName:
+    Type: String
+    Default: bronze
+    Description: Athena/Glue database for Bronze tables.
+
+  CreateWorkGroup:
+    Type: String
+    AllowedValues: ["true","false"]
+    Default: "true"
+    Description: Create a dedicated Athena WorkGroup (true) or use PRIMARY (false).
+
+Conditions:
+  MakeWG: !Equals [!Ref CreateWorkGroup, "true"]
+
+Resources:
+
+  # ----------------------------
+  # Athena WorkGroup (optional)
+  # ----------------------------
+  AthenaWG:
+    Type: AWS::Athena::WorkGroup
+    Condition: MakeWG
+    Properties:
+      Name: !Sub "${Prefix}-wg-bronze"
+      Description: Bronze DDL workgroup
+      State: ENABLED
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AthenaResultsBucketName}/athena/"
+        PublishCloudWatchMetricsEnabled: true
+        EngineVersion:
+          SelectedEngineVersion: "Athena engine version 3"
+
+  # ----------------------------
+  # IAM Role for Lambda
+  # ----------------------------
+  DdlRunnerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Prefix}-athena-ddl-runner"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AthenaDdlPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Athena control plane
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetWorkGroup
+                Resource: "*"
+
+              # Glue catalog
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:CreateDatabase
+                  - glue:GetTable
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:DeleteTable
+                Resource: "*"
+
+              # Results bucket
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !Sub "arn:aws:s3:::${AthenaResultsBucketName}"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:aws:s3:::${AthenaResultsBucketName}/*"
+
+              # Warehouse bucket
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !Sub "arn:aws:s3:::${WarehouseBucketName}"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "arn:aws:s3:::${WarehouseBucketName}/*"
+
+  # ----------------------------
+  # Lambda function to run DDLs
+  # ----------------------------
+  DdlRunnerFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.11
+      Handler: index.handler
+      Timeout: 120
+      MemorySize: 256
+      Role: !GetAtt DdlRunnerRole.Arn
+      Environment:
+        Variables:
+          ATHENA_WORKGROUP: !If [MakeWG, !Ref AthenaWG, "primary"]
+          ATHENA_RESULTS_S3: !Sub "s3://${AthenaResultsBucketName}/athena/"
+      Code:
+        ZipFile: |
+          import json, os, time, urllib.request
+          import boto3
+          athena = boto3.client("athena")
+
+          def _send_response(event, context, status, data=None, reason=None, phys=None):
+              resp = {
+                  "Status": status,
+                  "Reason": reason or f"See CloudWatch Logs for requestId: {getattr(context,'aws_request_id','n/a')}",
+                  "PhysicalResourceId": phys or getattr(context,'aws_request_id','manual'),
+                  "StackId": event["StackId"],
+                  "RequestId": event["RequestId"],
+                  "LogicalResourceId": event["LogicalResourceId"],
+                  "NoRefresh": False,
+                  "Data": data or {}
+              }
+              body = json.dumps(resp).encode("utf-8")
+              req = urllib.request.Request(event["ResponseURL"], data=body, method="PUT")
+              req.add_header("content-type", "")
+              req.add_header("content-length", str(len(body)))
+              urllib.request.urlopen(req, timeout=30)
+
+          def _run_sql(sql, workgroup, out_s3):
+              q = athena.start_query_execution(
+                  QueryString=sql,
+                  WorkGroup=workgroup,
+                  ResultConfiguration={"OutputLocation": out_s3}
+              )
+              qid = q["QueryExecutionId"]
+              while True:
+                  time.sleep(2)
+                  s = athena.get_query_execution(QueryExecutionId=qid)
+                  st = s["QueryExecution"]["Status"]["State"]
+                  if st in ("SUCCEEDED","FAILED","CANCELLED"):
+                      return st, s["QueryExecution"]["Status"].get("StateChangeReason",""), qid
+
+          def handler(event, context):
+              req_type = event.get("RequestType","Create")
+              wg  = os.environ["ATHENA_WORKGROUP"]
+              out = os.environ["ATHENA_RESULTS_S3"]
+              try:
+                  if req_type == "Delete":
+                      _send_response(event, context, "SUCCESS", {"message":"noop on delete"}, phys="athena-ddl")
+                      return
+                  stmts = event["ResourceProperties"].get("Statements", [])
+                  for i, sql in enumerate(stmts, 1):
+                      state, reason, qid = _run_sql(sql, wg, out)
+                      if state != "SUCCEEDED":
+                          raise RuntimeError(f"Athena DDL failed (#{i}) state={state} qid={qid} reason={reason}")
+                  _send_response(event, context, "SUCCESS", {"ran": len(stmts)}, phys="athena-ddl")
+              except Exception as e:
+                  _send_response(event, context, "FAILED", reason=str(e), phys="athena-ddl")
+                  raise
+
+  # ----------------------------
+  # Custom Resource Trigger
+  # ----------------------------
+  RunBronzeDdl:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt DdlRunnerFn.Arn
+      DatabaseName: !Ref DatabaseName
+      WorkGroupName: !If [MakeWG, !Ref AthenaWG, "primary"]
+      Statements:
+        - !Sub >
+            CREATE DATABASE IF NOT EXISTS ${DatabaseName}
+            LOCATION 's3://${WarehouseBucketName}/bronze/';
+        - !Sub >
+            DROP TABLE IF EXISTS ${DatabaseName}.secref_bonds_bb;
+        - !Sub |
+            CREATE TABLE ${DatabaseName}.secref_bonds_bb (
+              vendor string,
+              dataset string,
+              file_date date,
+              source_bucket string,
+              source_key string,
+              load_ts timestamp,
+              ingest_id string,
+              isin string,
+              cusip string,
+              sedol string,
+              ticker string,
+              bbg_figi string,
+              issuer_name string,
+              instrument_type string,
+              currency string,
+              day_count string,
+              coupon_type string,
+              coupon decimal(8,4),
+              face_value decimal(18,4),
+              issue_dt date,
+              maturity_dt date,
+              first_coupon_dt date,
+              callable boolean,
+              puttable boolean,
+              seniority string,
+              is_valid boolean,
+              reason_code string,
+              reason_detail string
+            )
+            PARTITIONED BY (file_date)
+            LOCATION 's3://${WarehouseBucketName}/bronze/secref_bonds_bb'
+            TBLPROPERTIES (
+              'table_type'='ICEBERG',
+              'format'='PARQUET',
+              'format-version'='2',
+              'write.parquet.compression-codec'='zstd'
+            );
+        - !Sub >
+            DROP TABLE IF EXISTS ${DatabaseName}.secref_bonds_ref;
+        - !Sub |
+            CREATE TABLE ${DatabaseName}.secref_bonds_ref (
+              vendor string,
+              dataset string,
+              file_date date,
+              source_bucket string,
+              source_key string,
+              load_ts timestamp,
+              ingest_id string,
+              isin string,
+              cusip string,
+              sedol string,
+              ric string,
+              ticker string,
+              bbg_figi string,
+              issuer_name string,
+              instrument_type string,
+              currency string,
+              day_count string,
+              coupon_type string,
+              coupon decimal(8,4),
+              face_value decimal(18,4),
+              issue_dt date,
+              maturity_dt date,
+              first_coupon_dt date,
+              callable boolean,
+              puttable boolean,
+              seniority string,
+              is_valid boolean,
+              reason_code string,
+              reason_detail string
+            )
+            PARTITIONED BY (file_date)
+            LOCATION 's3://${WarehouseBucketName}/bronze/secref_bonds_ref'
+            TBLPROPERTIES (
+              'table_type'='ICEBERG',
+              'format'='PARQUET',
+              'format-version'='2',
+              'write.parquet.compression-codec'='zstd'
+            );
+
+Outputs:
+  WorkGroupName:
+    Value: !If [MakeWG, !Ref AthenaWG, "primary"]
+    Description: Athena WorkGroup where DDL ran
+
+  BronzeDatabase:
+    Value: !Ref DatabaseName
+    Description: Athena/Glue database

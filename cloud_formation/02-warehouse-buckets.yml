@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  S3 buckets for the security reference data warehouse:
+  - Warehouse bucket for Iceberg tables
+  - Athena query-results bucket
+
+Parameters:
+  Prefix:
+    Type: String
+    Default: mdp
+    Description: Short name to prefix resource names (e.g., mdp)
+
+Resources:
+
+  # ------------------------
+  # Warehouse bucket
+  # ------------------------
+  WarehouseBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "${Prefix}-secref-warehouse-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: "warehouse-ia-after-180"
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 180
+            ExpirationInDays: 3650
+
+  # ------------------------
+  # Athena query-results bucket
+  # ------------------------
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub "${Prefix}-athena-query-results-${AWS::AccountId}-${AWS::Region}"
+      LifecycleConfiguration:
+        Rules:
+          - Id: "athena-results-cleanup"
+            Status: Enabled
+            ExpirationInDays: 30
+
+Outputs:
+  WarehouseBucketName:
+    Value: !Ref WarehouseBucket
+    Description: S3 bucket for Iceberg tables
+  AthenaResultsBucketName:
+    Value: !Ref AthenaResultsBucket
+    Description: S3 bucket for Athena query results
