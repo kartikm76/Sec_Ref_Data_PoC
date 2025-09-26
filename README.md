@@ -39,7 +39,7 @@ source ~/.zshrc
 
 ---
 
-## 🧹 Cleanup Operations
+## 🧹 Cleanup
 
 Preview cleanup:
 ```bash
@@ -53,7 +53,7 @@ Execute cleanup (empties S3 buckets and deletes stacks in dependency order):
 
 ---
 
-## 🚀 Deployment Operations
+## 🚀 Deployment
 
 ```Examples
 ./manage.sh deploy --only mdp-s3-raw-event           # deploy just one stack
@@ -95,10 +95,10 @@ Selective deployments:
 ```bash
 ./manage.sh deploy --only mdp-athena-ddl
 ./manage.sh outputs --stack mdp-athena-ddl
-
+```
 ---
 
-## 🧪 Test Operations
+## 🧪 Tests
 
 Smoke tests for EventBridge → SQS and Athena checks:
 
@@ -119,7 +119,8 @@ Run with specific Event stack:
 ```
 
 ---
-Athena tests
+# Athena tests
+
 Smoke only
 ```bash
 ./tests.sh --athena-smoke
