@@ -41,7 +41,10 @@ Resources:
     Type: AWS::Athena::WorkGroup
     Condition: MakeWG
     Properties:
-      Name: !Sub "${Prefix}-wg-bronze"
+      Name:
+        !Sub 
+          - "${Prefix}-wg-bronze-${AWS::StackName}"
+          - { Stack: !Ref "AWS::StackName", Short: !Select [2, !Split ['/', !Ref 'AWS::StackId']] }
       Description: Bronze DDL workgroup
       State: ENABLED
       WorkGroupConfiguration:
@@ -237,10 +240,7 @@ Resources:
             PARTITIONED BY (file_date)
             LOCATION 's3://${WarehouseBucketName}/bronze/secref_bonds_bb'
             TBLPROPERTIES (
-              'table_type'='ICEBERG',
-              'format'='PARQUET',
-              'format-version'='2',
-              'write.parquet.compression-codec'='zstd'
+              'table_type'='ICEBERG'              
             );
         - !Sub >
             DROP TABLE IF EXISTS ${DatabaseName}.secref_bonds_ref;
@@ -279,10 +279,7 @@ Resources:
             PARTITIONED BY (file_date)
             LOCATION 's3://${WarehouseBucketName}/bronze/secref_bonds_ref'
             TBLPROPERTIES (
-              'table_type'='ICEBERG',
-              'format'='PARQUET',
-              'format-version'='2',
-              'write.parquet.compression-codec'='zstd'
+              'table_type'='ICEBERG'
             );
 
 Outputs:

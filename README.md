@@ -119,6 +119,23 @@ Run with specific Event stack:
 ```
 
 ---
+Athena tests
+Smoke only
+```bash
+./tests.sh --athena-smoke
+```
+
+Full cycle
+```bash
+./tests.sh --athena
+```
+
+Full + cleanup
+```bash
+./tests.sh --athena --athena-clean
+```
+
+---
 
 ## 📊 Outputs and Logs
 
@@ -182,6 +199,3 @@ aws cloudformation list-stacks \
   --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
   --query "StackSummaries[?starts_with(StackName, 'mdp-cfn-notify')].[StackName, StackStatus]" \
   --output table
-
-
-© 2025 MDP CloudFormation Automation
