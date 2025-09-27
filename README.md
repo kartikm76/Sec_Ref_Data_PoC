@@ -8,9 +8,11 @@ This repository automates end-to-end provisioning, cleanup, and testing for the 
 
 ## 🧱 Security Reference Data Platform — Layered Architecture
 
+<sub>
+
 | **Layer** | **Service / Component** | **Purpose / Function** | **Partition Strategy / Update Behavior** | **Viable Alternatives** |
 |-----------|--------------------------|-------------------------|------------------------------------------|--------------------------|
-| **Data Ingestion** | **S3 (Vendor Buckets)** | Receives raw vendor files (BPIPE micro-batches, Refinitiv, Exchanges) | Partitioned by `dataset`, `file_date`; **append-only** | • **Managed:** AWS Transfer Family, Amazon Kinesis Data Firehose <br> • **Serverless:** Direct S3 Put via SDK, EventBridge Scheduler |
+| **Data Ingestion** | **S3 (Vendor Buckets)** | Receives raw vendor files (BPIPE micro-batches, Refinitiv, Exchanges) | Partitioned by `dataset`, `file_date`; **append-only** | • **Managed:** AWS Transfer Family, Kinesis Data Firehose <br> • **Serverless:** Direct S3 Put via SDK, EventBridge Scheduler |
 |  | **EventBridge (ObjectCreated)** | Detects new file uploads and generates events | N/A | • **Managed:** SNS Notifications <br> • **Serverless:** Lambda Trigger |
 |  | **SQS Queue (Buffer)** | Buffers incoming messages to handle bursts | FIFO/Standard queue; retains unprocessed events | • **Managed:** Kinesis Data Streams <br> • **Serverless:** EventBridge Pipe internal buffer |
 |  | **EventBridge Pipe** | Filters/throttles SQS messages; triggers Step Function | N/A | • **Managed:** Lambda poller <br> • **Serverless:** Step Function direct integration |
@@ -33,6 +35,8 @@ This repository automates end-to-end provisioning, cleanup, and testing for the 
 | **Data Control / Observability** | **CloudWatch / Grafana** | Monitor pipelines & metrics | N/A | • **Managed:** OpenSearch Dashboards <br> • **Serverless:** CloudWatch Logs Insights |
 |  | **Exception Repository** | Logs rejected/failed records | Stored in S3 or DynamoDB | • **Managed:** DynamoDB <br> • **Serverless:** S3 + Athena |
 |  | **Notifications (SNS / Email)** | Alerts for job/DQ failures | N/A | • **Managed:** EventBridge Rules <br> • **Serverless:** Slack ChatOps |
+
+</sub>
 
 ## 🧰 Prerequisites
 
