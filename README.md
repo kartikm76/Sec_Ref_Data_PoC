@@ -8,8 +8,6 @@ This repository automates end-to-end provisioning, cleanup, and testing for the 
 
 ## 🧱 Security Reference Data Platform — Layered Architecture
 
-<sub>
-
 | **Layer** | **Service / Component** | **Purpose / Function** | **Partition Strategy / Update Behavior** | **Viable Alternatives** |
 |-----------|--------------------------|-------------------------|------------------------------------------|--------------------------|
 | **Data Ingestion** | **S3 (Vendor Buckets)** | Receives raw vendor files (BPIPE micro-batches, Refinitiv, Exchanges) | Partitioned by `dataset`, `file_date`; **append-only** | • **Managed:** AWS Transfer Family, Kinesis Data Firehose <br> • **Serverless:** Direct S3 Put via SDK, EventBridge Scheduler |
@@ -36,7 +34,6 @@ This repository automates end-to-end provisioning, cleanup, and testing for the 
 |  | **Exception Repository** | Logs rejected/failed records | Stored in S3 or DynamoDB | • **Managed:** DynamoDB <br> • **Serverless:** S3 + Athena |
 |  | **Notifications (SNS / Email)** | Alerts for job/DQ failures | N/A | • **Managed:** EventBridge Rules <br> • **Serverless:** Slack ChatOps |
 
-</sub>
 
 ## 🧰 Prerequisites
 
