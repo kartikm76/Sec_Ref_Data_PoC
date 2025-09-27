@@ -3,6 +3,8 @@
 This repository automates end-to-end provisioning, cleanup, and testing for the **Market Data Platform (MDP)** prototype on AWS using **CloudFormation** and **AWS CLI**.
 
 ---
+## High Level Architecture
+![Alt text](SecRef-BluePrint.png)
 
 ## 🧰 Prerequisites
 
